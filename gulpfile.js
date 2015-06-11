@@ -14,6 +14,7 @@ var logSizes = require('gulp-filesize');
 var gulpUtil = require('gulp-util');
 var filesize = require('filesize');
 var fs = require("fs");
+var gzipSize = require('gzip-size');
 
 gulp.task('default', [
 	'js',
@@ -95,20 +96,23 @@ gulp.task('production', ['js', 'sass', 'html'], function (done) {
 			
 	stream.on('end', function () {
 		// TODO: make more generic
-	
+
 		// Print out file size compression stats!
 		var jsSize = fs.statSync('build/resume.js').size;
 		var cssSize = fs.statSync('build/resume.css').size;
 		var htmlSize = fs.statSync('build/resume.html').size;
-		var finalSize = fs.statSync('dist/resume.html').size;
+		var originalSize = jsSize + cssSize + htmlSize;
+		var finalSize = gzipSize.sync(fs.readFileSync('dist/resume.html'));
 
 		// TODO: color output
 		gulpUtil.log('JS, CSS, and HTML were ' +
-				gulpUtil.colors.blue(filesize(jsSize + cssSize + htmlSize)) +
+				gulpUtil.colors.blue(filesize(originalSize)) +
 				' combined.');
 		gulpUtil.log('Final HTML file size is ' +
-				gulpUtil.colors.green(filesize(finalSize)) + '!');
-		
+				gulpUtil.colors.green(filesize(finalSize)) + ' gzipped (' +
+				gulpUtil.colors.green(Math.round((1 - finalSize / originalSize) * 100) + '%') +
+				' compression)');
+
 		done();
 	})
 });
