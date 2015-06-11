@@ -90,7 +90,8 @@ gulp.task('production', ['js', 'sass', 'html'], function (done) {
 			}))
 			.pipe(minifyHtml({
 				collapseWhitespace: true,
-				removeComments: true
+				removeComments: true,
+				conservativeCollapse: true
 			}))
 			.pipe(gulp.dest('dist'))
 			
