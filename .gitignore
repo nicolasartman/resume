@@ -8,5 +8,6 @@ pids
 *.seed
 
 # Everything else
-dist
 node_modules
+build
+dist

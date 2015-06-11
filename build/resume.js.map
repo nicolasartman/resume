@@ -1,1 +1,0 @@
-{"version":3,"sources":["resume.js"],"names":[],"mappings":";;AAAA,AAAC,CAAA,YAAM;AACN,QAAO,CAAC,GAAG,CAAC,WAAW,CAAC,CAAC;CACzB,CAAA,EAAE,CAAC","file":"resume.js","sourcesContent":["(() => {\n\tconsole.log('bodegadoo');\n}())"],"sourceRoot":"/source/"}
