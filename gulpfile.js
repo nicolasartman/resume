@@ -15,6 +15,20 @@ var gulpUtil = require('gulp-util');
 var filesize = require('filesize');
 var fs = require("fs");
 var gzipSize = require('gzip-size');
+var aws = require('aws-sdk');
+var open = require('open');
+
+
+var s3 = new aws.S3({
+	params: {
+		// TODO: use bucket and region from env instead
+		Bucket: 'www.nicolasartman.com'
+	},
+	region: 'us-west-1',
+	sslEnabled: true
+});
+
+console.log('regions', s3.region, s3.regions);
 
 gulp.task('default', [
 	'js',
@@ -58,6 +72,17 @@ gulp.task('html', function () {
 	return gulp.src('src/resume.html')
 			.pipe(gulp.dest('build'));
 });
+
+var uploadProductionBuildToS3 = function (productionFileBuffer, isProduction, complete) {
+	gulpUtil.log('Deploying to production...');
+	
+	s3.upload({
+		'Body': productionFileBuffer,
+		'Bucket': 'www.nicolasartman.com',
+		'Key': isProduction ? 'resume.html' : 'staged.html',
+		'ContentType': 'text/html'
+	}, complete);	
+}
 
 gulp.task('production', ['js', 'sass', 'html'], function (done) {
 
@@ -103,7 +128,8 @@ gulp.task('production', ['js', 'sass', 'html'], function (done) {
 		var cssSize = fs.statSync('build/resume.css').size;
 		var htmlSize = fs.statSync('build/resume.html').size;
 		var originalSize = jsSize + cssSize + htmlSize;
-		var finalSize = gzipSize.sync(fs.readFileSync('dist/resume.html'));
+		var productionFileBuffer = fs.readFileSync('dist/resume.html');
+		var finalSize = gzipSize.sync(productionFileBuffer);
 
 		// TODO: color output
 		gulpUtil.log('JS, CSS, and HTML were ' +
@@ -113,7 +139,23 @@ gulp.task('production', ['js', 'sass', 'html'], function (done) {
 				gulpUtil.colors.green(filesize(finalSize)) + ' gzipped (' +
 				gulpUtil.colors.green(Math.round((1 - finalSize / originalSize) * 100) + '%') +
 				' compression)');
-
-		done();
+		
+		if (argv.stage) {
+			uploadProductionBuildToS3(productionFileBuffer, false, function (error, data) {
+				if (data && data['Location']) {
+					gulpUtil.log(gulpUtil.colors.green('Staged successfully, ' +
+							'opening staged page in browser...'));
+					open(data['Location']);
+				} else {
+					gulpUtil.error('Stage failed!', error);
+				}
+				done();
+			});
+		} else if (argv.release) {
+			uploadProductionBuildToS3(productionFileBuffer, true, function (error, data) {
+				// TODO: invalidate cache and print message
+			})
+			done();
+		}
 	})
 });
