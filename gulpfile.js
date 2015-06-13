@@ -17,19 +17,27 @@ var fs = require("fs");
 var gzipSize = require('gzip-size');
 var aws = require('aws-sdk');
 var open = require('open');
+var q = require('q');
 
+// load the config
+if (!fs.existsSync('config.json')) {
+	throw new Error('You must first create a config.json. ' +
+			'See the README and example config for more information.');
+}
+var config = JSON.parse(fs.readFileSync('config.json').toString());
 
+// configure aws services
 var s3 = new aws.S3({
-	params: {
-		// TODO: use bucket and region from env instead
-		Bucket: 'www.nicolasartman.com'
-	},
-	region: 'us-west-1',
+	region: config.aws.s3.region,
 	sslEnabled: true
 });
+var cloudFront = new aws.CloudFront({
+	params: {
+	  DistributionId: config.aws.cloudFront.distributionId
+	}
+});
 
-console.log('regions', s3.region, s3.regions);
-
+// configure tasks
 gulp.task('default', [
 	'js',
 	'sass',
@@ -42,7 +50,7 @@ gulp.task('default', [
 		},
 		startPath: '/resume.html'
 	});
-	
+
 	gulp.watch('src/*.js', ['js', browserSync.reload]);
 	gulp.watch('src/*.scss', ['sass']);
 	gulp.watch('src/resume.html', ['html', browserSync.reload]);
@@ -73,23 +81,27 @@ gulp.task('html', function () {
 			.pipe(gulp.dest('build'));
 });
 
-var uploadProductionBuildToS3 = function (productionFileBuffer, isProduction, complete) {
-	gulpUtil.log('Deploying to production...');
-	
-	s3.upload({
-		'Body': productionFileBuffer,
-		'Bucket': 'www.nicolasartman.com',
-		'Key': isProduction ? 'resume.html' : 'staged.html',
-		'ContentType': 'text/html'
-	}, complete);	
+
+var logStatistics = function () {
+	// Print out file size compression stats!
+	var jsSize = fs.statSync('build/resume.js').size;
+	var cssSize = fs.statSync('build/resume.css').size;
+	var htmlSize = fs.statSync('build/resume.html').size;
+	var originalSize = jsSize + cssSize + htmlSize;
+	var finalSize = gzipSize.sync(fs.readFileSync('dist/resume.html'));
+
+	gulpUtil.log('JS, CSS, and HTML were ' +
+			gulpUtil.colors.blue(filesize(originalSize)) + ' combined.');
+	gulpUtil.log('Final HTML file size is ' +
+			gulpUtil.colors.green(filesize(finalSize)) + ' gzipped (' +
+			gulpUtil.colors.green(Math.round((1 - finalSize / originalSize) * 100) + '%') +
+			' compression)');
 }
 
-gulp.task('production', ['js', 'sass', 'html'], function (done) {
+gulp.task('dist', ['js', 'sass', 'html'], function (done) {
 
 	var jsFileStream = gulp.src(['./build/*.js'])
-	.pipe(uglify({
-				wrap: 'test'
-			}));
+			.pipe(uglify());
 	var cssFileStream = gulp.src(['./build/*.css'])
 			.pipe(minifyCss());
 
@@ -119,43 +131,69 @@ gulp.task('production', ['js', 'sass', 'html'], function (done) {
 				conservativeCollapse: true
 			}))
 			.pipe(gulp.dest('dist'))
-			
-	stream.on('end', function () {
-		// TODO: make more generic
-
-		// Print out file size compression stats!
-		var jsSize = fs.statSync('build/resume.js').size;
-		var cssSize = fs.statSync('build/resume.css').size;
-		var htmlSize = fs.statSync('build/resume.html').size;
-		var originalSize = jsSize + cssSize + htmlSize;
-		var productionFileBuffer = fs.readFileSync('dist/resume.html');
-		var finalSize = gzipSize.sync(productionFileBuffer);
-
-		// TODO: color output
-		gulpUtil.log('JS, CSS, and HTML were ' +
-				gulpUtil.colors.blue(filesize(originalSize)) +
-				' combined.');
-		gulpUtil.log('Final HTML file size is ' +
-				gulpUtil.colors.green(filesize(finalSize)) + ' gzipped (' +
-				gulpUtil.colors.green(Math.round((1 - finalSize / originalSize) * 100) + '%') +
-				' compression)');
 		
-		if (argv.stage) {
-			uploadProductionBuildToS3(productionFileBuffer, false, function (error, data) {
-				if (data && data['Location']) {
-					gulpUtil.log(gulpUtil.colors.green('Staged successfully, ' +
-							'opening staged page in browser...'));
-					open(data['Location']);
-				} else {
-					gulpUtil.error('Stage failed!', error);
-				}
-				done();
-			});
-		} else if (argv.release) {
-			uploadProductionBuildToS3(productionFileBuffer, true, function (error, data) {
-				// TODO: invalidate cache and print message
-			})
+		stream.on('end', function () {
+			logStatistics();
 			done();
+		});
+});
+
+var uploadFileToS3 = function (fileBuffer, fileName) {
+	return q.ninvoke(s3, 'upload', {
+		'Bucket': config.aws.s3.bucket,
+		'Body': fileBuffer,
+		'Key': fileName,
+		'ContentType': 'text/html'
+	});
+};
+
+var invalidateFileInCloudFront = function (fileName) {
+	return q.ninvoke(cloudFront, 'createInvalidation', {
+		InvalidationBatch: {
+			// TODO: use a better value, like a hash of the file contents
+			CallerReference: '' + Date.now(),
+	    Paths: {
+	      Quantity: 1,
+	      Items: ['/resume.html']
+	    }
+	  }
+	});
+};
+
+gulp.task('stage', ['dist'], function (done) {
+	gulpUtil.log('Staging...');
+	
+	uploadFileToS3(fs.readFileSync('dist/resume.html'), 'staged.html')
+	.then(function (data) {
+		if (data && data['Location']) {
+			gulpUtil.log(gulpUtil.colors.green('Staged successfully, ' +
+					'opening staged page in browser...'));
+			open(data['Location']);
 		}
 	})
+	.catch(function (error) {
+		gulpUtil.log(gulpUtil.colors.red('Stage failed!'), error);
+	})
+	.finally(done)
+	.done();
+});
+
+// TODO: only allow release when the git working directory is clean, for safety
+gulp.task('release', ['dist'], function (done) {
+	gulpUtil.log('Releasing to production...');
+	
+	uploadFileToS3(fs.readFileSync('dist/resume.html'), 'resume.html')
+	.then(function () {
+		return invalidateFileInCloudFront('resume.html')
+	})
+	.then(function (data) {
+		gulpUtil.log(gulpUtil.colors.green('Successfully released! ' +
+				'The resume cache has been invalidated, which may take up to 15 ' +
+				'minutes to take effect before this release is viewable everywhere'));
+	})
+	.catch(function (error) {
+		gulpUtil.log(gulpUtil.colors.red('Release failed!'), error);
+	})
+	.finally(done)
+	.done();
 });

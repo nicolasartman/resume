@@ -1,0 +1,11 @@
+{
+  "aws": {
+		"s3": {
+			"bucket": "www.yourdomain.com",
+			"region": "us-west-1"
+		},
+		"cloudFront": {
+			"distributionId": "AAAABBBBBCCCCDDDD"
+		}
+	}
+}

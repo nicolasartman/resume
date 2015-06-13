@@ -14,3 +14,6 @@ pids
 node_modules
 build
 dist
+
+# Cloud services config
+config.json
